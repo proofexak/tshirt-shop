@@ -1,0 +1,15 @@
+.worktrees/
+.superpowers/
+
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+
+.env
+.env.local
+*.env
+
+*.log
+.DS_Store
