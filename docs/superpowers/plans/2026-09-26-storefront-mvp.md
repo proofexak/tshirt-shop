@@ -23,7 +23,7 @@
 ## Review Focus
 
 - Out-of-stock variant added via a stale page (stock changed between page load and add-to-cart) — add-to-cart must re-validate stock server-side, not trust the client. Test owned by Task 7.
-- Stripe webhook delivered twice, or before the client-side cart-complete call lands — order completion must be idempotent on the Stripe payment intent id. Test owned by Task 10.
+- Stripe webhook delivered twice, or racing the client-side completion call — order completion must be idempotent on the Stripe payment intent id, from whichever path reaches it first. Test owned by Task 9.
 - Signup with an email that already has a Medusa customer record — must surface a clear inline error, not a generic 500. Tests owned by Task 4 (backend) and Task 8 (frontend).
 - Cart cookie present but pointing at a cart whose order already completed — must start a fresh cart, not error or risk double-charging. Test owned by Task 7.
 - Variant picker where a size/design combination has no matching variant — must be non-selectable and must not crash the product page. Test owned by Task 6.
@@ -213,39 +213,48 @@ git commit -m "Pin customer auth behavior, including duplicate-email error"
 **Files:**
 - Create: `apps/storefront/` (Next.js App Router, TypeScript, Tailwind)
 - Create: `apps/storefront/lib/medusa-client.ts` — exports `medusa`, an SDK client configured from `NEXT_PUBLIC_MEDUSA_BACKEND_URL`.
-- Test: `apps/storefront/lib/medusa-client.test.ts`
+- Create: `apps/storefront/components/Header.tsx` — site-wide nav: a "Home" link and a right-hand nav slot containing "Sign up" and "Login" links. The right-hand slot is a named export (`Header`'s `rightSlot` prop, default `<SignupLoginLinks />`) so Tasks 7 and 8 can each replace its contents without editing Header's own markup.
+- Modify: `apps/storefront/app/layout.tsx` — renders `<Header />` above `{children}`.
+- Test: `apps/storefront/lib/medusa-client.test.ts`, `apps/storefront/components/Header.test.tsx`
 
 **Interfaces:**
 - Consumes: Medusa server from Task 1.
-- Produces: `medusa` client (`import { medusa } from "@/lib/medusa-client"`) — every later frontend task imports this, not a fresh SDK instance.
+- Produces: `medusa` client (`import { medusa } from "@/lib/medusa-client"`) — every later frontend task imports this, not a fresh SDK instance. `Header` — accepts a `rightSlot?: ReactNode` prop; Task 7 passes a cart icon, Task 8 passes login-state-aware links. Both modify `layout.tsx`'s `<Header rightSlot={...} />` call, not `Header.tsx` itself.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 ```typescript
 test("medusa client is configured against the backend URL", () => {
   expect(medusa.config.baseUrl).toBe(process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL);
 });
+
+test("header renders a Home link and the default right slot", () => {
+  render(<Header />);
+  expect(screen.getByRole("link", { name: "Home" })).toBeVisible();
+  expect(screen.getByRole("link", { name: "Sign up" })).toBeVisible();
+  expect(screen.getByRole("link", { name: "Login" })).toBeVisible();
+});
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter storefront test medusa-client.test.ts`
-Expected: FAIL — module doesn't exist.
+Run: `pnpm --filter storefront test medusa-client.test.ts Header.test.tsx`
+Expected: FAIL — modules don't exist.
 
-- [ ] **Step 3: Implement `medusa-client.ts`**
+- [ ] **Step 3: Implement `medusa-client.ts`, `Header.tsx`, and wire `layout.tsx`**
 
-Export `medusa`, constructed from the Medusa JS SDK with `baseUrl: process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL`.
+Export `medusa`, constructed from the Medusa JS SDK with `baseUrl: process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL`. `Header` takes `rightSlot?: ReactNode`, defaulting to a small `<SignupLoginLinks />` component (also exported from `Header.tsx`) rendering the "Sign up" and "Login" links.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pnpm --filter storefront test medusa-client.test.ts`
+Run: `pnpm --filter storefront test medusa-client.test.ts Header.test.tsx`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add apps/storefront
-git commit -m "Scaffold Next.js storefront and Medusa client wrapper"
+git commit -m "Scaffold Next.js storefront, Medusa client wrapper, and site header"
 ```
 
 ---
@@ -305,12 +314,15 @@ git commit -m "Add catalog and product detail pages"
 **Files:**
 - Create: `apps/storefront/lib/cart.ts` — `getOrCreateCart()`, `addLineItem(cartId, variantId, quantity)`
 - Create: `apps/storefront/store/ui-store.ts` — Zustand store, `isCartDrawerOpen`, `openCartDrawer()`, `closeCartDrawer()`
-- Create: `apps/storefront/components/CartDrawer.tsx`
-- Test: `apps/storefront/lib/cart.test.ts`
+- Create: `apps/storefront/components/CartDrawer.tsx` — includes a "Checkout" link to `/checkout`, rendered when the cart has at least one item.
+- Create: `apps/storefront/components/CartIcon.tsx` — button showing item count, calls `openCartDrawer()` on click.
+- Modify: `apps/storefront/app/products/[handle]/page.tsx` (Task 6) — add an "Add to cart" button, enabled only once `VariantPicker` has a selection, calling `addLineItem(cartId, selectedVariantId, 1)` then `openCartDrawer()`.
+- Modify: `apps/storefront/app/layout.tsx` (Task 5) — pass `<CartIcon />` as `Header`'s `rightSlot` alongside the existing links (render both, not one replacing the other), and render `<CartDrawer />` once outside `Header`.
+- Test: `apps/storefront/lib/cart.test.ts`, `apps/storefront/app/products/product-page-cart.test.tsx`
 
 **Interfaces:**
-- Consumes: `medusa` client (Task 5), `VariantPicker`'s selected variant id (Task 6), zero-stock `basic-hoodie` S variant (Task 2).
-- Produces: `getOrCreateCart()`, `addLineItem(cartId, variantId, quantity)` — consumed by Task 9's checkout page.
+- Consumes: `medusa` client (Task 5), `VariantPicker`'s selected variant id (Task 6), zero-stock `basic-hoodie` S variant (Task 2), `Header`'s `rightSlot` prop (Task 5).
+- Produces: `getOrCreateCart()`, `addLineItem(cartId, variantId, quantity)` — consumed by Task 10's checkout page (see the renumbering note in Task 9/10 below — checkout is now Task 10).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -327,27 +339,35 @@ test("getOrCreateCart replaces a cart whose order already completed", async () =
   expect(cart.id).not.toBe(completedCart.id);
   expect(cart.completed_at).toBeFalsy();
 });
+
+test("selecting a variant then clicking Add to cart calls addLineItem and opens the drawer", async () => {
+  render(<ProductPage params={{ handle: "classic-crew-tee" }} />);
+  await userEvent.click(await screen.findByRole("button", { name: "M" }));
+  await userEvent.click(screen.getByRole("button", { name: "Add to cart" }));
+  expect(mockAddLineItem).toHaveBeenCalledWith(expect.any(String), mVariantId, 1);
+  expect(useUiStore.getState().isCartDrawerOpen).toBe(true);
+});
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter storefront test cart.test.ts`
-Expected: FAIL — module doesn't exist.
+Run: `pnpm --filter storefront test cart.test.ts product-page-cart.test.tsx`
+Expected: FAIL — module and wiring don't exist.
 
-- [ ] **Step 3: Implement `cart.ts`**
+- [ ] **Step 3: Implement `cart.ts`, `CartIcon`, `CartDrawer`'s checkout link, and wire the product page + layout**
 
-`addLineItem` calls Medusa's cart line-item API, letting Medusa's own inventory check surface the rejection (do not pre-check client-side only). `getOrCreateCart` reads the cart id cookie, fetches the cart, and — if missing or `completed_at` is set — creates a new cart and overwrites the cookie.
+`addLineItem` calls Medusa's cart line-item API, letting Medusa's own inventory check surface the rejection (do not pre-check client-side only). `getOrCreateCart` reads the cart id cookie, fetches the cart, and — if missing or `completed_at` is set — creates a new cart and overwrites the cookie. The product page's "Add to cart" button is disabled until a variant is selected.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pnpm --filter storefront test cart.test.ts`
+Run: `pnpm --filter storefront test cart.test.ts product-page-cart.test.tsx`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/storefront/lib/cart.ts apps/storefront/store/ui-store.ts apps/storefront/components/CartDrawer.tsx apps/storefront/lib/cart.test.ts
-git commit -m "Add cart handling with stock and stale-cart checks"
+git add apps/storefront/lib/cart.ts apps/storefront/store/ui-store.ts apps/storefront/components/CartDrawer.tsx apps/storefront/components/CartIcon.tsx apps/storefront/app/products apps/storefront/app/layout.tsx
+git commit -m "Add cart handling, add-to-cart wiring, and cart icon/drawer in the header"
 ```
 
 ---
@@ -398,16 +418,74 @@ git commit -m "Add signup and login pages"
 
 ---
 
-### Task 9: Checkout Page + Stripe Elements
+### Task 9: Idempotent Order Completion + Stripe Webhook Handler
+
+> **Ruling (pre-flight scan, 2026-09-26):** the original plan put the checkout page before the webhook, with the confirmation page (Task 11) "consuming an order id" that only the async webhook produced — but a client has no order id to redirect to right after Stripe confirms payment client-side; webhooks are server-to-server and arrive on their own schedule. Fix: extract the idempotent completion logic into a shared function used by *both* the webhook (this task, for the case the client-side call never lands) and a synchronous route the checkout page calls directly (Task 10, so it has an order id to redirect to immediately). This task now precedes checkout so that shared function exists before Task 10 needs it.
+
+**Files:**
+- Create: `apps/storefront/lib/order-completion.ts` — `completeOrderForPaymentIntent(paymentIntentId: string): Promise<{ orderId: string }>`
+- Create: `apps/storefront/app/api/webhooks/stripe/route.ts` — calls `completeOrderForPaymentIntent`
+- Test: `apps/storefront/lib/order-completion.test.ts`
+
+**Interfaces:**
+- Consumes: the Stripe payment provider (Task 3) — the payment intent's associated Medusa cart is resolved via the payment session Medusa already links to it, not passed in separately.
+- Produces: `completeOrderForPaymentIntent(paymentIntentId)` — consumed by Task 10's checkout page (via a thin API route) and by this task's own webhook route. Also produces a completed Medusa order with `metadata.stripe_payment_intent_id` set — consumed by Task 11's confirmation page via its id.
+
+- [ ] **Step 1: Write the failing tests**
+
+```typescript
+test("completing twice for the same payment intent returns the same order id and creates only one order", async () => {
+  const cart = await createCartWithStripePaymentSession();
+  const first = await completeOrderForPaymentIntent(cart.paymentIntentId);
+  const second = await completeOrderForPaymentIntent(cart.paymentIntentId);
+  expect(second.orderId).toBe(first.orderId);
+  const orders = await adminClient.orders.list({ cart_id: cart.id });
+  expect(orders.length).toBe(1);
+});
+
+test("the same webhook event delivered twice completes only one order", async () => {
+  const event = buildPaymentIntentSucceededEvent({ payment_intent: "pi_123" });
+  await POST(webhookRequest(event));
+  await POST(webhookRequest(event));
+  const orders = await adminClient.orders.list({ cart_id: testCart.id });
+  expect(orders.length).toBe(1);
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pnpm --filter storefront test order-completion.test.ts route.test.ts`
+Expected: FAIL — module and route don't exist.
+
+- [ ] **Step 3: Implement `order-completion.ts` and the webhook route**
+
+`completeOrderForPaymentIntent`: query Medusa for an existing order with `metadata.stripe_payment_intent_id` equal to `paymentIntentId`; if found, return its id without completing anything again. Otherwise, resolve the cart from the payment intent's Medusa payment session, complete the cart, set `metadata.stripe_payment_intent_id` on the resulting order, and return its id. Log the order-placed event server-side (this is the "confirmation email" substitute per spec). The webhook route calls this function with the event's `payment_intent` and returns `200`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pnpm --filter storefront test order-completion.test.ts route.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/storefront/lib/order-completion.ts apps/storefront/app/api/webhooks
+git commit -m "Add idempotent order completion and Stripe webhook handler"
+```
+
+---
+
+### Task 10: Checkout Page + Stripe Elements
 
 **Files:**
 - Create: `apps/storefront/app/checkout/page.tsx`
 - Create: `apps/storefront/lib/checkout.ts` — `createPaymentSession(cartId)`
+- Create: `apps/storefront/app/api/orders/complete/route.ts` — `POST { paymentIntentId }`, calls Task 9's `completeOrderForPaymentIntent`, returns `{ orderId }`
 - Test: `apps/storefront/app/checkout/checkout-page.test.tsx`
 
 **Interfaces:**
-- Consumes: `getOrCreateCart` (Task 7), `useSession` (Task 8), `stripe` payment provider (Task 3).
-- Produces: nothing consumed downstream beyond the Stripe payment intent id, read by Task 10's webhook handler from the Stripe event itself.
+- Consumes: `getOrCreateCart` (Task 7), `useSession` (Task 8), `stripe` payment provider (Task 3), `completeOrderForPaymentIntent` (Task 9, via this task's own `/api/orders/complete` route).
+- Produces: a client-side redirect to `/order/[orderId]` on payment success — the entry point Task 11's confirmation page expects.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -432,6 +510,17 @@ test("checkout redirects to catalog with a message when the cart has no items", 
   render(<CheckoutPage />);
   expect(mockRouter.push).toHaveBeenCalledWith("/?message=Your+cart+was+empty+or+expired");
 });
+
+test("on successful payment confirmation, completes the order and redirects to it", async () => {
+  mockSession(testUser);
+  mockCart({ items: [testLineItem] });
+  mockStripeConfirmPayment({ paymentIntent: { id: "pi_123", status: "succeeded" } });
+  mockCompleteOrderRoute({ orderId: "order_456" });
+  render(<CheckoutPage />);
+  await userEvent.click(await screen.findByRole("button", { name: "Pay" }));
+  expect(mockCompleteOrderRoute).toHaveBeenCalledWith("pi_123");
+  expect(mockRouter.push).toHaveBeenCalledWith("/order/order_456");
+});
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -439,9 +528,9 @@ test("checkout redirects to catalog with a message when the cart has no items", 
 Run: `pnpm --filter storefront test checkout-page.test.tsx`
 Expected: FAIL — page doesn't exist.
 
-- [ ] **Step 3: Implement `checkout.ts` and the checkout page**
+- [ ] **Step 3: Implement `checkout.ts`, the `/api/orders/complete` route, and the checkout page**
 
-Collects shipping address, calls `createPaymentSession(cartId)` (wraps Medusa's payment-collection + initiate-session calls from Task 3), mounts Stripe Elements with the returned client secret. Before rendering Elements, check `cart.items.length`: if zero — which is what an expired/invalid cart cookie becomes once `getOrCreateCart` (Task 7) silently replaces it — redirect to `/` with a `message` query param instead of rendering a payment form for nothing to pay for.
+Checkout page collects shipping address, calls `createPaymentSession(cartId)` (wraps Medusa's payment-collection + initiate-session calls from Task 3), mounts Stripe Elements with the returned client secret. Before rendering Elements, check `cart.items.length`: if zero — which is what an expired/invalid cart cookie becomes once `getOrCreateCart` (Task 7) silently replaces it — redirect to `/` with a `message` query param instead of rendering a payment form for nothing to pay for. On the Stripe Elements "Pay" button's `confirmPayment` success callback, `POST` the resulting `paymentIntent.id` to `/api/orders/complete`, then `router.push` to `/order/${orderId}` using the response. The `/api/orders/complete` route is a thin wrapper: it calls Task 9's `completeOrderForPaymentIntent` and returns its result as JSON — the webhook (Task 9) remains the fallback path for a client that never gets to run this callback (browser closed mid-payment, etc.), and both paths hit the same idempotency check, so a client success followed by a webhook delivery (or the reverse) still produces exactly one order.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -451,53 +540,8 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/storefront/app/checkout apps/storefront/lib/checkout.ts
-git commit -m "Add checkout page with Stripe Elements"
-```
-
----
-
-### Task 10: Stripe Webhook Handler + Idempotent Order Completion
-
-**Files:**
-- Create: `apps/storefront/app/api/webhooks/stripe/route.ts`
-- Test: `apps/storefront/app/api/webhooks/stripe/route.test.ts`
-
-**Interfaces:**
-- Consumes: Stripe payment intent from Task 9's session.
-- Produces: a completed Medusa order — consumed by Task 11's confirmation page via its id.
-
-- [ ] **Step 1: Write the failing test**
-
-```typescript
-test("the same webhook event delivered twice completes only one order", async () => {
-  const event = buildPaymentIntentSucceededEvent({ payment_intent: "pi_123", cart_id: testCart.id });
-  await POST(webhookRequest(event));
-  await POST(webhookRequest(event));
-  const orders = await adminClient.orders.list({ cart_id: testCart.id });
-  expect(orders.length).toBe(1);
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `pnpm --filter storefront test route.test.ts`
-Expected: FAIL — route doesn't exist.
-
-- [ ] **Step 3: Implement the webhook route**
-
-Before completing the cart, query Medusa for an existing order with `metadata.stripe_payment_intent_id` equal to the event's `payment_intent`; if found, return `200` without completing again. Otherwise complete the cart and set that metadata field on the resulting order. Log the order-placed event server-side (this is the "confirmation email" substitute per spec).
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `pnpm --filter storefront test route.test.ts`
-Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add apps/storefront/app/api/webhooks
-git commit -m "Add idempotent Stripe webhook handler"
+git add apps/storefront/app/checkout apps/storefront/lib/checkout.ts apps/storefront/app/api/orders
+git commit -m "Add checkout page with Stripe Elements and synchronous order completion"
 ```
 
 ---
@@ -510,7 +554,7 @@ git commit -m "Add idempotent Stripe webhook handler"
 - Test: `apps/storefront/app/order/order-page.test.tsx`
 
 **Interfaces:**
-- Consumes: order id (Task 10), `useSession` (Task 8).
+- Consumes: order id, arrived at via Task 10's post-payment redirect to `/order/[orderId]`. `useSession` (Task 8).
 - Produces: nothing consumed by later tasks — this is a leaf.
 
 - [ ] **Step 1: Write the failing test**
