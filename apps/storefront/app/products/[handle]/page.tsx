@@ -1,14 +1,23 @@
 "use client";
 
 import { Suspense, use, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useProduct } from "@/hooks/useProduct";
+import { useCart, cartQueryKey } from "@/hooks/useCart";
+import { addLineItem } from "@/lib/cart-actions";
+import { useUiStore } from "@/store/ui-store";
 import { VariantPicker, type Variant } from "@/components/VariantPicker";
 
 function ProductPageContent({ handle }: { handle: string }) {
   const { data: product, isLoading, isError } = useProduct(handle);
-  // Held here (not inside VariantPicker) so a later "Add to cart" button on
+  const { data: cart } = useCart();
+  const queryClient = useQueryClient();
+  const openCartDrawer = useUiStore((state) => state.openCartDrawer);
+  // Held here (not inside VariantPicker) so the "Add to cart" button on
   // this same page can read it and stay disabled until a size is picked.
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
+  const [isAddingToCart, setIsAddingToCart] = useState(false);
+  const [addToCartError, setAddToCartError] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -41,19 +50,48 @@ function ProductPageContent({ handle }: { handle: string }) {
         }).format(price.calculated_amount)
       : null;
 
+  const handleAddToCart = async () => {
+    if (!selectedVariantId || !cart) {
+      return;
+    }
+    setAddToCartError(null);
+    setIsAddingToCart(true);
+    try {
+      await addLineItem(cart.id, selectedVariantId, 1);
+      await queryClient.invalidateQueries({ queryKey: cartQueryKey });
+      openCartDrawer();
+    } catch (error) {
+      setAddToCartError(
+        error instanceof Error ? error.message : "Could not add this item to the cart."
+      );
+    } finally {
+      setIsAddingToCart(false);
+    }
+  };
+
   return (
     <main
       className="mx-auto max-w-2xl px-4 py-8"
-      // Surfaces the held selection state (harmless, and lets Task 7 /
-      // e2e checks confirm a size was actually picked) until Task 7 adds
-      // the real "Add to cart" button that reads selectedVariantId.
+      // Surfaces the held selection state (harmless, and lets e2e checks
+      // confirm a size was actually picked).
       data-selected-variant-id={selectedVariantId ?? undefined}
     >
       <h1 className="mb-2 text-2xl font-semibold">{product.title}</h1>
       {formattedPrice && <p className="mb-6 text-lg">{formattedPrice}</p>}
       <VariantPicker variants={variants} onSelect={setSelectedVariantId} />
-      {/* Task 7 adds an "Add to cart" button here, enabled once
-          selectedVariantId is non-null. */}
+      <button
+        type="button"
+        disabled={!selectedVariantId || !cart || isAddingToCart}
+        onClick={handleAddToCart}
+        className="mt-4 rounded bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Add to cart
+      </button>
+      {addToCartError && (
+        <p role="alert" className="mt-2 text-sm text-red-600">
+          {addToCartError}
+        </p>
+      )}
     </main>
   );
 }

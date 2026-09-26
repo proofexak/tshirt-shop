@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import { Header } from "@/components/Header";
+import { Header, SignupLoginLinks } from "@/components/Header";
+import { CartIcon } from "@/components/CartIcon";
+import { CartDrawer } from "@/components/CartDrawer";
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -12,8 +14,18 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en">
       <body>
-        <Header />
-        <Providers>{children}</Providers>
+        <Providers>
+          <Header
+            rightSlot={
+              <>
+                <SignupLoginLinks />
+                <CartIcon />
+              </>
+            }
+          />
+          <CartDrawer />
+          {children}
+        </Providers>
       </body>
     </html>
   );
