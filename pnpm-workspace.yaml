@@ -1,6 +1,25 @@
 packages:
   - "apps/*"
 
+# @tanstack/react-query doesn't declare @types/react as a peer dependency, so
+# pnpm has no per-instance react version to key its @types/react resolution
+# against. Its nested d.ts files' bare `import ... from 'react'` then falls
+# through to pnpm's shared virtual-store hoist folder
+# (node_modules/.pnpm/node_modules/@types/react), which — in this workspace,
+# with apps/backend's admin panel pulling in React 18 — resolves to
+# @types/react@18.3.31, not storefront's own 19.3.0. React 19's stricter
+# ReactNode/ReactPortal shape then fails to structurally match React 18's,
+# breaking `next build`'s TypeScript pass on anything typed against
+# QueryClientProvider's children prop. This patches the peer metadata so
+# pnpm resolves @types/react per-instance (alongside react itself) instead.
+packageExtensions:
+  "@tanstack/react-query":
+    peerDependencies:
+      "@types/react": "*"
+    peerDependenciesMeta:
+      "@types/react":
+        optional: true
+
 # Allow native build scripts for these deps (required by @medusajs/* and
 # Next.js packages); pnpm blocks unapproved postinstall/build scripts by default.
 allowBuilds:
