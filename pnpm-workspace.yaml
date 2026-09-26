@@ -1,11 +1,13 @@
 packages:
   - "apps/*"
 
-# Allow native build scripts for these deps (required by @medusajs/* packages);
-# pnpm blocks unapproved postinstall/build scripts by default.
+# Allow native build scripts for these deps (required by @medusajs/* and
+# Next.js packages); pnpm blocks unapproved postinstall/build scripts by default.
 allowBuilds:
   "@medusajs/telemetry": true
   "@swc/core": true
   esbuild: true
   msgpackr-extract: true
   protobufjs: true
+  sharp: true
+  unrs-resolver: true
