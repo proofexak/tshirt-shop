@@ -20,6 +20,20 @@ async function createCart(): Promise<Cart> {
   return cart;
 }
 
+// A cart id cookie pointing at nothing Medusa recognizes any more — the
+// cart was deleted, or the id is malformed/garbage — surfaces as a 404 (both
+// cases: verified empirically against the live backend, both a well-formed
+// but nonexistent id and a garbage string get `{"type":"not_found",...}` /
+// 404, never a 400). Only THIS is safe to treat as "no cart" and paper over
+// by creating a new one. Anything else (a timeout, a 5xx, a network error)
+// must NOT be treated the same way: if `retrieve` fails transiently and the
+// following `createCart` call succeeds, silently swallowing the error would
+// overwrite the cookie and orphan the shopper's real cart (with real items)
+// with no trace of it. So those are rethrown instead.
+function isCartNotFoundError(error: unknown): boolean {
+  return error instanceof FetchError && (error.status === 404 || error.status === 400);
+}
+
 // Reads the cart id cookie, fetches that cart, and — if there's no cookie,
 // the cart no longer exists, or its order already completed — creates a new
 // cart in the seeded region and overwrites the cookie. This can only mutate
@@ -36,8 +50,12 @@ export async function getOrCreateCart(): Promise<Cart> {
       if (!cart.completed_at) {
         return cart;
       }
-    } catch {
-      // Cart no longer exists (e.g. deleted) — fall through and create one.
+    } catch (error) {
+      if (!isCartNotFoundError(error)) {
+        throw error;
+      }
+      // Cart no longer exists, or the cookie held a garbage id — fall
+      // through and create one.
     }
   }
 

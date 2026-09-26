@@ -3,14 +3,23 @@
 import { Suspense, use, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProduct } from "@/hooks/useProduct";
-import { useCart, cartQueryKey } from "@/hooks/useCart";
-import { addLineItem } from "@/lib/cart-actions";
+import { cartQueryKey } from "@/hooks/useCart";
+import { addToCart } from "@/lib/cart-actions";
 import { useUiStore } from "@/store/ui-store";
 import { VariantPicker, type Variant } from "@/components/VariantPicker";
 
+type AddToCartErrorCode = "out_of_stock" | "invalid_quantity";
+
+// Maps addToCart's stable result codes to shopper-facing copy. Kept here
+// (not in lib/cart-actions.ts) because a "use server" file may only export
+// async functions — a plain lookup object can't live there.
+const ADD_TO_CART_ERROR_MESSAGES: Record<AddToCartErrorCode, string> = {
+  out_of_stock: "This variant is out of stock.",
+  invalid_quantity: "Could not add this item to the cart.",
+};
+
 function ProductPageContent({ handle }: { handle: string }) {
   const { data: product, isLoading, isError } = useProduct(handle);
-  const { data: cart } = useCart();
   const queryClient = useQueryClient();
   const openCartDrawer = useUiStore((state) => state.openCartDrawer);
   // Held here (not inside VariantPicker) so the "Add to cart" button on
@@ -51,16 +60,26 @@ function ProductPageContent({ handle }: { handle: string }) {
       : null;
 
   const handleAddToCart = async () => {
-    if (!selectedVariantId || !cart) {
+    if (!selectedVariantId) {
       return;
     }
     setAddToCartError(null);
     setIsAddingToCart(true);
     try {
-      await addLineItem(cart.id, selectedVariantId, 1);
+      // addToCart resolves the shopper's own cart from the httpOnly cookie
+      // itself — this page never needs to know the cart id (see
+      // lib/cart-actions.ts).
+      const result = await addToCart(selectedVariantId, 1);
+      if (!result.ok) {
+        setAddToCartError(ADD_TO_CART_ERROR_MESSAGES[result.error]);
+        return;
+      }
       await queryClient.invalidateQueries({ queryKey: cartQueryKey });
       openCartDrawer();
     } catch (error) {
+      // An unexpected failure (e.g. the action call itself couldn't reach
+      // the server) — addToCart's own expected outcomes are result values,
+      // not throws (see lib/cart-actions.ts).
       setAddToCartError(
         error instanceof Error ? error.message : "Could not add this item to the cart."
       );
@@ -81,7 +100,7 @@ function ProductPageContent({ handle }: { handle: string }) {
       <VariantPicker variants={variants} onSelect={setSelectedVariantId} />
       <button
         type="button"
-        disabled={!selectedVariantId || !cart || isAddingToCart}
+        disabled={!selectedVariantId || isAddingToCart}
         onClick={handleAddToCart}
         className="mt-4 rounded bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
       >

@@ -9,7 +9,7 @@ import { useUiStore } from "@/store/ui-store";
 // anything they close over has to come from vi.hoisted() — a plain `const`
 // declared below would still be in its temporal dead zone when the factory
 // actually runs.
-const { mVariantId, mockProduct, mockGetCart, mockAddLineItem } = vi.hoisted(() => {
+const { mVariantId, mockProduct, mockAddToCart } = vi.hoisted(() => {
   const mVariantId = "variant_m_123";
   return {
     mVariantId,
@@ -23,8 +23,7 @@ const { mVariantId, mockProduct, mockGetCart, mockAddLineItem } = vi.hoisted(() 
         { id: "variant_xl_123", title: "XL", inventory_quantity: 10 },
       ],
     },
-    mockGetCart: vi.fn(),
-    mockAddLineItem: vi.fn(),
+    mockAddToCart: vi.fn(),
   };
 });
 
@@ -34,9 +33,12 @@ vi.mock("@/hooks/useProduct", () => ({
   useProduct: () => ({ data: mockProduct, isLoading: false, isError: false }),
 }));
 
+// The product page no longer reads the cart at all (post-review-round-1
+// ruling): addToCart(variantId, quantity) resolves the shopper's own cart
+// from the httpOnly cookie server-side, so this test only needs to mock
+// that one action — no getCart mock needed here any more.
 vi.mock("@/lib/cart-actions", () => ({
-  getCart: (...args: unknown[]) => mockGetCart(...args),
-  addLineItem: (...args: unknown[]) => mockAddLineItem(...args),
+  addToCart: (...args: unknown[]) => mockAddToCart(...args),
 }));
 
 // React 19's `use()` reads the page's `params` promise; on first render (an
@@ -72,8 +74,7 @@ async function renderProductPage() {
 describe("product page — add to cart", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetCart.mockResolvedValue({ id: "cart_test123", items: [] });
-    mockAddLineItem.mockResolvedValue({ id: "cart_test123", items: [] });
+    mockAddToCart.mockResolvedValue({ ok: true, cart: { id: "cart_test123", items: [] } });
     useUiStore.setState({ isCartDrawerOpen: false });
   });
 
@@ -83,20 +84,18 @@ describe("product page — add to cart", () => {
     expect(await screen.findByRole("button", { name: "Add to cart" })).toBeDisabled();
   });
 
-  test("selecting a variant then clicking Add to cart calls addLineItem and opens the drawer", async () => {
+  test("selecting a variant then clicking Add to cart calls addToCart and opens the drawer", async () => {
     await renderProductPage();
 
     await userEvent.click(await screen.findByRole("button", { name: "M" }));
     await userEvent.click(screen.getByRole("button", { name: "Add to cart" }));
 
-    await waitFor(() =>
-      expect(mockAddLineItem).toHaveBeenCalledWith(expect.any(String), mVariantId, 1)
-    );
+    await waitFor(() => expect(mockAddToCart).toHaveBeenCalledWith(mVariantId, 1));
     expect(useUiStore.getState().isCartDrawerOpen).toBe(true);
   });
 
-  test("shows a visible error when addLineItem rejects (e.g. out of stock)", async () => {
-    mockAddLineItem.mockRejectedValueOnce(new Error("This variant is out of stock."));
+  test("shows a visible error when addToCart reports the item is out of stock", async () => {
+    mockAddToCart.mockResolvedValueOnce({ ok: false, error: "out_of_stock" });
     await renderProductPage();
 
     await userEvent.click(await screen.findByRole("button", { name: "M" }));

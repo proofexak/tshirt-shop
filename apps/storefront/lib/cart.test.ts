@@ -6,6 +6,10 @@
 // for the rest of the reasoning.
 import "./test-support/live-backend-env";
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { FetchError } from "@medusajs/js-sdk";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { medusa } from "./medusa-client";
 import { CART_COOKIE_NAME, addLineItem, getOrCreateCart } from "./cart";
@@ -117,6 +121,77 @@ async function createAndCompleteTestCart(): Promise<{ id: string }> {
   return { id: created.id };
 }
 
+// createAndCompleteTestCart() completes a REAL order, which permanently
+// reserves 1 unit of classic-crew-tee/L (Medusa never auto-releases a
+// completed order's inventory reservation) — seeded at 10, so running the
+// suite ~10 times would exhaust it and start failing every later task's
+// full-suite run with an unrelated "insufficient inventory" error, with no
+// way to recover short of manually reseeding the dev DB.
+//
+// Fix: cache the completed cart's id on disk (scoped to this machine, via
+// os.tmpdir() — never committed) and reuse it across test runs. The FIRST
+// run ever (or the first run after a fresh clone / DB reset) consumes
+// exactly one unit, same as before; every run after that consumes zero,
+// because "a cart whose order already completed" doesn't stop being true
+// once true — completed_at is immutable. If the cached id no longer
+// resolves (e.g. the dev DB was reset), this falls back to creating a fresh
+// one and re-caching it — self-healing, no manual reseeding ever required.
+//
+// (Considered instead: releasing the reservation right after each test run,
+// via @medusajs/core-flows' deleteReservationsWorkflow. That needs a
+// MedusaContainer, which only exists inside the backend process — reachable
+// from here only by shelling out to `medusa exec` as a subprocess, which
+// boots a whole second Medusa instance against the same DB on every test
+// run. That's slower, adds a dependency on the backend package's CLI being
+// on PATH, and risks contention with the dev server already running against
+// the same DB. Caching one already-completed cart avoids all of that.)
+const COMPLETED_CART_CACHE_PATH = join(
+  tmpdir(),
+  "tshirt-shop-storefront-cart-test-completed-cart.json"
+);
+
+function readCachedCompletedCartId(): string | null {
+  try {
+    if (!existsSync(COMPLETED_CART_CACHE_PATH)) {
+      return null;
+    }
+    const data = JSON.parse(readFileSync(COMPLETED_CART_CACHE_PATH, "utf-8"));
+    return typeof data.completedCartId === "string" ? data.completedCartId : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedCompletedCartId(cartId: string): void {
+  try {
+    writeFileSync(COMPLETED_CART_CACHE_PATH, JSON.stringify({ completedCartId: cartId }));
+  } catch {
+    // Best-effort — if this fails, the next run just completes (and
+    // consumes stock for) another test cart, which is still correct, just
+    // not free.
+  }
+}
+
+async function getOrCreateCompletedTestCart(): Promise<{ id: string }> {
+  const cachedId = readCachedCompletedCartId();
+  if (cachedId) {
+    try {
+      const { cart } = await medusa.store.cart.retrieve(cachedId);
+      if (cart.completed_at) {
+        return { id: cachedId };
+      }
+    } catch {
+      // Cached id no longer resolves (e.g. the dev DB was reset since the
+      // cache was written) — fall through and create + complete a fresh
+      // one below.
+    }
+  }
+
+  const fresh = await createAndCompleteTestCart();
+  writeCachedCompletedCartId(fresh.id);
+  return fresh;
+}
+
 beforeAll(async () => {
   try {
     const response = await fetch(`${BACKEND_URL}/health`, {
@@ -168,7 +243,7 @@ describe("getOrCreateCart", () => {
   });
 
   test("replaces a cart whose order already completed", async () => {
-    const completedCart = await createAndCompleteTestCart();
+    const completedCart = await getOrCreateCompletedTestCart();
     mockCartCookie(completedCart.id);
 
     const cart = await getOrCreateCart();
@@ -176,4 +251,25 @@ describe("getOrCreateCart", () => {
     expect(cart.id).not.toBe(completedCart.id);
     expect(cart.completed_at).toBeFalsy();
   }, 30000);
+
+  test("creates a new cart when the cookie holds a nonexistent/garbage cart id", async () => {
+    mockCartCookie("cart_this_id_does_not_exist_garbage");
+
+    const cart = await getOrCreateCart();
+
+    expect(cart.id).toMatch(/^cart_/);
+    expect(cart.id).not.toBe("cart_this_id_does_not_exist_garbage");
+  });
+
+  test("rethrows an unexpected error instead of silently discarding the shopper's cart", async () => {
+    const first = await getOrCreateCart();
+    mockCartCookie(first.id);
+    const retrieveSpy = vi
+      .spyOn(medusa.store.cart, "retrieve")
+      .mockRejectedValueOnce(new FetchError("Service unavailable", "Internal Server Error", 500));
+
+    await expect(getOrCreateCart()).rejects.toThrow("Service unavailable");
+
+    retrieveSpy.mockRestore();
+  });
 });
