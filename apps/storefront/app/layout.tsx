@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { Header, SignupLoginLinks } from "@/components/Header";
+import { Header } from "@/components/Header";
+import { AuthLinks } from "@/components/AuthLinks";
 import { CartIcon } from "@/components/CartIcon";
 import { CartDrawer } from "@/components/CartDrawer";
 import { Providers } from "./providers";
@@ -18,7 +19,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <Header
             rightSlot={
               <>
-                <SignupLoginLinks />
+                <AuthLinks />
                 <CartIcon />
               </>
             }
