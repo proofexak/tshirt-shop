@@ -125,6 +125,23 @@ async function ensureCustomerBound(
       email,
       password,
     });
+
+    // Round-2 review note: don't just trust this second token either —
+    // verify it the same way as the first, closing the same gap this whole
+    // function exists to close. In the ordinary case this just confirms
+    // what should already be true (the customer record was created a
+    // moment ago), but if it somehow isn't (e.g. read-replica lag on
+    // Medusa's side), returning a false success here would be exactly the
+    // round-1 bug again, just one step later.
+    const boundCustomer = await fetchSessionCustomer(boundToken);
+    if (!boundCustomer) {
+      return {
+        ok: false,
+        status: 500,
+        message: "Something went wrong. Please try again.",
+      };
+    }
+
     return { ok: true, token: boundToken };
   } catch (error) {
     return toResult(error);
