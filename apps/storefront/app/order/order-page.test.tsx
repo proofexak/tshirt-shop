@@ -43,7 +43,11 @@ const testOrder: OrderDetail = {
 // that hook and route handler for the real Medusa-backed logic, exercised
 // separately in lib/orders.test.ts and app/api/orders/[id]/route.test.ts).
 function mockOrder(order: OrderDetail | null) {
-  mockUseOrder.mockReturnValue({ data: order, isLoading: false });
+  mockUseOrder.mockReturnValue({ data: order, isLoading: false, isError: false });
+}
+
+function mockOrderError() {
+  mockUseOrder.mockReturnValue({ data: undefined, isLoading: false, isError: true });
 }
 
 // React 19's use(params) suspends once even for an already-resolved
@@ -84,6 +88,11 @@ describe("order confirmation page", () => {
     expect(await screen.findByText(String(testOrder.display_id))).toBeVisible();
     expect(screen.getByText("Classic Crew Tee")).toBeVisible();
     expect(screen.getByText("Basic Hoodie")).toBeVisible();
+    // Variant/size + quantity for each line item (round-1 review ask).
+    expect(screen.getByText("M")).toBeVisible();
+    expect(screen.getByText("L")).toBeVisible();
+    expect(screen.getByText(/qty 2/i)).toBeVisible();
+    expect(screen.getByText(/qty 1/i)).toBeVisible();
     expect(screen.getByText(/€25\.00/)).toBeVisible();
   });
 
@@ -108,7 +117,22 @@ describe("order confirmation page", () => {
 
     await renderOrderPage(testOrder.id);
 
-    expect(mockReplace).toHaveBeenCalledWith(`/login?next=/order/${testOrder.id}`);
+    expect(mockReplace).toHaveBeenCalledWith(
+      `/login?next=${encodeURIComponent(`/order/${testOrder.id}`)}`
+    );
+    expect(screen.queryByRole("heading", { name: /order confirmed/i })).not.toBeInTheDocument();
+  });
+
+  // Round-1 review finding: a genuine backend failure (useOrder() throwing
+  // on a non-ok response) must render a distinct error, not the same
+  // "Order not found" message a mismatched-ownership or malformed id gets —
+  // otherwise a real outage looks identical to "this order doesn't exist".
+  test("shows a distinct error message (not 'not found') when the order fails to load", async () => {
+    mockOrderError();
+    await renderOrderPage(testOrder.id);
+
+    expect(await screen.findByText(/couldn.t load your order/i)).toBeVisible();
+    expect(screen.queryByText(/couldn.t find that order/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /order confirmed/i })).not.toBeInTheDocument();
   });
 });

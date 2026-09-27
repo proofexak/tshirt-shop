@@ -43,7 +43,7 @@ describe("account page", () => {
   });
 
   test("lists the customer's past orders, newest first, each linking to its order page", async () => {
-    mockUseOrders.mockReturnValue({ data: testOrders, isLoading: false });
+    mockUseOrders.mockReturnValue({ data: testOrders, isLoading: false, isError: false });
     renderAccountPage();
 
     const links = await screen.findAllByRole("link");
@@ -57,7 +57,7 @@ describe("account page", () => {
   });
 
   test("shows an empty state when the customer has no past orders", async () => {
-    mockUseOrders.mockReturnValue({ data: [], isLoading: false });
+    mockUseOrders.mockReturnValue({ data: [], isLoading: false, isError: false });
     renderAccountPage();
 
     expect(await screen.findByText(/haven.t placed any orders/i)).toBeVisible();
@@ -65,9 +65,20 @@ describe("account page", () => {
 
   test("redirects to /login with next set when there is no session", async () => {
     mockUseSession.mockReturnValue({ data: null, isLoading: false });
-    mockUseOrders.mockReturnValue({ data: [], isLoading: false });
+    mockUseOrders.mockReturnValue({ data: [], isLoading: false, isError: false });
     renderAccountPage();
 
-    expect(mockReplace).toHaveBeenCalledWith("/login?next=/account");
+    expect(mockReplace).toHaveBeenCalledWith(`/login?next=${encodeURIComponent("/account")}`);
+  });
+
+  // Round-1 review finding: a genuine backend failure must render a
+  // distinct error, not the same empty state a customer with zero real
+  // orders gets — otherwise an outage looks identical to "no orders yet".
+  test("shows a distinct error message (not the empty state) when orders fail to load", async () => {
+    mockUseOrders.mockReturnValue({ data: undefined, isLoading: false, isError: true });
+    renderAccountPage();
+
+    expect(await screen.findByText(/couldn.t load your orders/i)).toBeVisible();
+    expect(screen.queryByText(/haven.t placed any orders/i)).not.toBeInTheDocument();
   });
 });

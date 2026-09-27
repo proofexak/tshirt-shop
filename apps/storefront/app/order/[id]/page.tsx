@@ -16,11 +16,15 @@ function OrderPageContent({ id }: { id: string }) {
 
   useEffect(() => {
     if (!isSessionLoading && !isAuthenticated) {
-      router.replace(`/login?next=/order/${id}`);
+      router.replace(`/login?next=${encodeURIComponent(`/order/${id}`)}`);
     }
   }, [isSessionLoading, isAuthenticated, id, router]);
 
-  const { data: order, isLoading: isOrderLoading } = useOrder(id, { enabled: isAuthenticated });
+  const {
+    data: order,
+    isLoading: isOrderLoading,
+    isError: isOrderError,
+  } = useOrder(id, { enabled: isAuthenticated });
 
   if (isSessionLoading || !isAuthenticated) {
     // Either still resolving the session, or redirecting away (the effect
@@ -36,6 +40,22 @@ function OrderPageContent({ id }: { id: string }) {
     return (
       <main className="mx-auto max-w-2xl px-4 py-8">
         <p>Loading…</p>
+      </main>
+    );
+  }
+
+  if (isOrderError) {
+    // Distinct from "not found" (round-1 review finding): useOrder() only
+    // throws for a genuine server-side failure — the route handler already
+    // resolves every "can't show this" case (no session, doesn't exist,
+    // malformed id, someone else's order) as a 200 with `order: null`,
+    // handled below. Collapsing both into the same "Order not found"
+    // message would hide a real backend outage from the shopper who just
+    // paid.
+    return (
+      <main className="mx-auto max-w-2xl px-4 py-8">
+        <h1 className="mb-2 text-2xl font-semibold">Something went wrong</h1>
+        <p>We couldn&apos;t load your order — please try again.</p>
       </main>
     );
   }

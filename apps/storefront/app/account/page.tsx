@@ -15,11 +15,15 @@ export default function AccountPage() {
 
   useEffect(() => {
     if (!isSessionLoading && !isAuthenticated) {
-      router.replace("/login?next=/account");
+      router.replace(`/login?next=${encodeURIComponent("/account")}`);
     }
   }, [isSessionLoading, isAuthenticated, router]);
 
-  const { data: orders, isLoading: isOrdersLoading } = useOrders({ enabled: isAuthenticated });
+  const {
+    data: orders,
+    isLoading: isOrdersLoading,
+    isError: isOrdersError,
+  } = useOrders({ enabled: isAuthenticated });
   // Sorted here too (not just in lib/orders.ts's listCustomerOrders) so
   // "newest first" (ruling 3) is guaranteed by the page itself, not just an
   // upstream implementation detail this component happens to rely on.
@@ -39,6 +43,21 @@ export default function AccountPage() {
     return (
       <main className="mx-auto max-w-2xl px-4 py-8">
         <p>Loading…</p>
+      </main>
+    );
+  }
+
+  if (isOrdersError) {
+    // Distinct from the empty state (round-1 review finding): useOrders()
+    // only throws for a genuine server-side failure — an unauthenticated
+    // visitor never reaches this hook at all (redirected above), and the
+    // route handler resolves "no session" as a 200 with `orders: []`.
+    // Collapsing a real outage into "You haven't placed any orders yet."
+    // would misinform a shopper who does have orders.
+    return (
+      <main className="mx-auto max-w-2xl px-4 py-8">
+        <h1 className="mb-2 text-2xl font-semibold">Something went wrong</h1>
+        <p>We couldn&apos;t load your orders — please try again.</p>
       </main>
     );
   }

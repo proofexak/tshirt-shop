@@ -61,11 +61,27 @@ const ORDER_DETAIL_FIELDS =
 
 // A well-formed-but-nonexistent order id and a malformed/garbage string
 // both surface from Medusa as a 404 (verified empirically against the live
-// backend, same pattern as lib/cart.ts's isCartNotFoundError) — never a
-// crash, and importantly the SAME shape as "found, but not yours" below, so
-// callers can't distinguish a nonexistent id from an inaccessible one.
+// backend — both `GET /store/orders/not-a-real-id` and
+// `GET /store/orders/order_01FAKE...` return
+// `404 {"type":"not_found","message":"Order id not found: ..."}`, same
+// pattern as lib/cart.ts's isCartNotFoundError) — never a crash, and
+// importantly the SAME shape as "found, but not yours" below, so callers
+// can't distinguish a nonexistent id from an inaccessible one.
+//
+// Deliberately NOT treating a 400 as not-found (round-1 review finding):
+// an earlier version of this function also matched status 400, on the
+// theory that a malformed id might be rejected before Medusa even looks it
+// up. But a 400 here isn't caused by a bad id at all — Medusa's own
+// framework code throws `MedusaError.Types.INVALID_DATA` (-> 400) from
+// `validateRelationsLimit` when the requested `fields` exceed
+// `storeRelationsLimit: 3` (see
+// node_modules/@medusajs/framework/dist/http/utils/relations-limit.js and
+// .../store/orders/query-config.js's `storeRelationsLimit: 3`), i.e. a bug
+// in ORDER_DETAIL_FIELDS below, not a shopper-caused condition. Silently
+// mapping that to "Order not found" would hide a real regression behind a
+// misleading, shopper-facing message instead of surfacing it as an error.
 function isOrderNotFoundError(error: unknown): boolean {
-  return error instanceof FetchError && (error.status === 404 || error.status === 400);
+  return error instanceof FetchError && error.status === 404;
 }
 
 // Medusa's GET /store/orders/:id route is intentionally unauthenticated —

@@ -105,11 +105,36 @@ describe("getOrderForCustomer", () => {
     expect(mockRetrieve).not.toHaveBeenCalled();
   });
 
-  test("rethrows an unexpected (non-404/400) error instead of treating it as not-found", async () => {
+  test("rethrows an unexpected (non-404) error instead of treating it as not-found", async () => {
     mockFetchSessionCustomer.mockResolvedValueOnce(CUSTOMER_A);
     mockRetrieve.mockRejectedValueOnce(new FetchError("Service unavailable", "Internal Server Error", 500));
 
     await expect(getOrderForCustomer("order_1", "tok_a")).rejects.toThrow("Service unavailable");
+  });
+
+  // Round-1 review finding: a 400 here is NOT Medusa's way of rejecting a
+  // malformed order id (verified live — both a garbage string and a
+  // well-formed-but-nonexistent id return 404, never 400). Medusa's own
+  // framework code throws a 400 (MedusaError.Types.INVALID_DATA) when the
+  // `fields` query param this module requests exceeds the store's
+  // relations-depth limit (storeRelationsLimit: 3 — see
+  // node_modules/@medusajs/framework/dist/http/utils/relations-limit.js and
+  // .../store/orders/query-config.js). That's a bug in ORDER_DETAIL_FIELDS,
+  // not a shopper-caused condition, so it must propagate as a real error —
+  // an earlier version of this function mapped 400 to not-found too, which
+  // would have silently shown "Order not found" for exactly this class of
+  // regression.
+  test("rethrows a 400 instead of treating it as not-found (a 400 here means a fields/query bug, not a bad id)", async () => {
+    mockFetchSessionCustomer.mockResolvedValueOnce(CUSTOMER_A);
+    mockRetrieve.mockRejectedValueOnce(
+      new FetchError(
+        "The following fields expand more than the maximum of 3 allowed relations: items.variant.product.type",
+        "Bad Request",
+        400
+      )
+    );
+
+    await expect(getOrderForCustomer("order_1", "tok_a")).rejects.toThrow(/allowed relations/);
   });
 });
 
