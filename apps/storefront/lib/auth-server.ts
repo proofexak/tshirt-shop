@@ -64,6 +64,73 @@ function toResult(error: unknown): { ok: false; status: number; message: string 
   return { ok: false, status, message: "Something went wrong. Please try again." };
 }
 
+// Medusa's own "you already have a customer, don't call /store/customers
+// again" guard (StoreCreateCustomer's route, when `req.auth_context.actor_id`
+// is already set) — a 400 INVALID_DATA with this exact message. Treated
+// specially below: hitting it during recovery means the token we were
+// suspicious of was actually fine all along (the earlier "does this token
+// resolve to a customer" check must have failed for a transient reason, or
+// a concurrent request already finished creating the customer), not a real
+// failure.
+function isAlreadyBoundError(error: unknown): boolean {
+  return error instanceof FetchError && /already authenticated as a customer/i.test(error.message);
+}
+
+// Round-1 review finding: a login token isn't necessarily bound to a
+// customer. Medusa's emailpass login only checks the password — it doesn't
+// require a customer record to exist — so if a customer's auth identity
+// was ever created without a customer record ever being attached (e.g.
+// signup's register step succeeded but its store.customer.create step
+// failed, or failed on every retry since), `/auth/customer/emailpass`
+// still returns 200 with a token, just one whose JWT has no bound actor.
+// Blindly trusting that 200 (the round-1 bug) sets a session cookie for a
+// token that GET /store/customers/me will 401 on forever — the shopper
+// looks logged in on the form that just redirected them, then logged out
+// everywhere else, with no way to fix it themselves.
+//
+// This resolves that dangling state instead of just reporting it: if the
+// token doesn't resolve to a customer, use that same token to create the
+// customer record (Medusa's documented recovery pattern for this exact
+// case), then log in again for a token whose JWT actually carries
+// `app_metadata.customer_id`. Called after every `/auth/customer/emailpass`
+// call in this module (both signup's final login step and a plain login),
+// so it doesn't matter which of the two flows the shopper used to trigger
+// the repair.
+async function ensureCustomerBound(
+  token: string,
+  email: string,
+  password: string
+): Promise<AuthActionResult> {
+  const customer = await fetchSessionCustomer(token);
+  if (customer) {
+    return { ok: true, token };
+  }
+
+  try {
+    await medusa.store.customer.create({ email }, undefined, {
+      Authorization: `Bearer ${token}`,
+    });
+  } catch (error) {
+    if (!isAlreadyBoundError(error)) {
+      return toResult(error);
+    }
+    // Already bound after all — the earlier fetchSessionCustomer check
+    // must have failed for an unrelated, transient reason. The original
+    // token is fine.
+    return { ok: true, token };
+  }
+
+  try {
+    const { token: boundToken } = await authFetch<{ token: string }>("/auth/customer/emailpass", {
+      email,
+      password,
+    });
+    return { ok: true, token: boundToken };
+  } catch (error) {
+    return toResult(error);
+  }
+}
+
 // The three-round-trip sequence observed in Task 4: register (actorless
 // token) -> create the customer record with that token -> log in (customer-
 // bound token, the one worth persisting as a session). Only the final
@@ -76,16 +143,24 @@ export async function signupCustomer(email: string, password: string): Promise<A
       { email, password }
     );
 
-    await medusa.store.customer.create({ email }, undefined, {
-      Authorization: `Bearer ${registrationToken}`,
-    });
+    try {
+      await medusa.store.customer.create({ email }, undefined, {
+        Authorization: `Bearer ${registrationToken}`,
+      });
+    } catch (error) {
+      if (!isAlreadyBoundError(error)) {
+        throw error;
+      }
+      // A concurrent/earlier attempt already created the customer for this
+      // identity — fine, proceed to log in below.
+    }
 
     const { token } = await authFetch<{ token: string }>("/auth/customer/emailpass", {
       email,
       password,
     });
 
-    return { ok: true, token };
+    return ensureCustomerBound(token, email, password);
   } catch (error) {
     return toResult(error);
   }
@@ -97,7 +172,7 @@ export async function loginCustomer(email: string, password: string): Promise<Au
       email,
       password,
     });
-    return { ok: true, token };
+    return ensureCustomerBound(token, email, password);
   } catch (error) {
     return toResult(error);
   }

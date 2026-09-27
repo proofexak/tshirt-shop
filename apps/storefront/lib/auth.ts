@@ -33,6 +33,16 @@ async function postAuth(path: string, email: string, password: string): Promise<
     return { ok: true };
   }
 
+  // Defense in depth (round-1 review finding 3): only ever surface a 4xx's
+  // body message. Our own route handlers already guarantee a 5xx body
+  // never carries real error detail (lib/auth-server.ts's toResult maps
+  // any non-4xx failure to this same generic string before it's ever sent),
+  // but this doesn't rely on that holding forever — a 5xx here always
+  // renders the generic message regardless of what its body contains.
+  if (response.status < 400 || response.status >= 500) {
+    return { ok: false, error: GENERIC_ERROR };
+  }
+
   const data: unknown = await response.json().catch(() => null);
   const message =
     data && typeof data === "object" && "message" in data && typeof data.message === "string"
