@@ -32,6 +32,38 @@
   </a>
 </p>
 
+## Admin dashboard
+
+The shop owner manages the product catalog through Medusa's built-in admin
+dashboard, unmodified, at `http://localhost:9000/app` (with `pnpm --filter
+backend dev` running).
+
+**Create the admin account** (one-time, per environment): set `ADMIN_EMAIL`
+and `ADMIN_PASSWORD` in `apps/backend/.env` — these are never committed, and
+`.env.example` only has empty placeholders — then run:
+
+```bash
+pnpm --filter backend admin:create
+```
+
+The script is idempotent: running it again with the same `ADMIN_EMAIL` logs
+that the account already exists instead of erroring. Log in to the dashboard
+with those credentials.
+
+Product photos uploaded through the dashboard use Medusa's local file
+provider: they're written to `apps/backend/static/` (gitignored runtime
+data, not committed) and served back at `http://localhost:9000/static/...`.
+
+**Checklist for admin-created products** (the dashboard doesn't enforce
+these, so check by hand): the product must be
+
+- **published** (not draft),
+- in the **Default Sales Channel**, and
+- have a **EUR price**.
+
+The dashboard's defaults already cover the first two; price is a required
+field when creating a product.
+
 ## Compatibility
 
 This starter is compatible with versions >= 2 of `@medusajs/medusa`. 
