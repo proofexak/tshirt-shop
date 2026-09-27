@@ -12,7 +12,7 @@ implementation cycle.
 ## Goal
 
 A real, demoable, sellable storefront for **premade shirts only**: a
-shopper can create an account, browse a fixed catalog, add items to a
+shopper can create an account, browse a catalog, add items to a
 cart, and pay with a Stripe test card, ending in a real order recorded in
 Medusa. No custom-design canvas, no Printful integration, no deployment —
 those are separate sub-projects.
@@ -22,7 +22,9 @@ those are separate sub-projects.
 - No design customizer (Konva canvas) — separate sub-project.
 - No Printful/fulfillment integration — orders are recorded in Medusa
   only, nothing is sent to a print vendor.
-- No admin UI for managing products — catalog is seeded via script.
+- No *custom* admin UI — the catalog is managed through Medusa's built-in
+  admin dashboard plus the seed script (amended 2026-09-27, see
+  `2026-09-27-storefront-admin-catalog-design.md`).
 - No deployment — runs locally against local Postgres.
 - No transactional email — order confirmation is the on-screen page plus
   a server-side log line. Revisit if a later sub-project needs it.
@@ -59,8 +61,9 @@ never cart line items themselves.
 
 **`apps/backend` (Medusa)**
 - Stripe payment provider plugin configured with test-mode keys.
-- Seed script creates a fixed set of premade products with variants
-  (sizes S–XL, a handful of designs). Run once at setup; no admin UI use.
+- Seed script creates the premade products with Size (S–XL) × Colour
+  variants and per-colour photos; further products are added through
+  Medusa's built-in admin dashboard (see the 2026-09-27 amendment).
 - Customer module used as-is for auth (signup, login, JWT session).
 
 **`apps/storefront` (Next.js)**
