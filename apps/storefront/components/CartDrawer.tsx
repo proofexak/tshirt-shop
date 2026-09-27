@@ -27,7 +27,7 @@ export function CartDrawer() {
           <ul>
             {items.map((item) => (
               <li key={item.id}>
-                {item.title} × {item.quantity}
+                {item.title} — {item.variant_title} × {item.quantity}
               </li>
             ))}
           </ul>

@@ -9,14 +9,19 @@ import { medusa } from "@/lib/medusa-client";
 // keeps the hook fully typed without adding it just for a type import.
 export type Product = Awaited<ReturnType<typeof medusa.store.product.list>>["products"][number];
 
-// Catalog listing only needs title + handle (both in the default field set),
-// so no `fields` override here — see useProduct.ts for the detail page's
-// richer query (variants, inventory, price).
+// Catalog listing needs the thumbnail for each card in addition to title +
+// handle. `thumbnail` is a bare field (no `+`/`*` modifier), which per
+// Medusa's FieldParser discards every other default field project-wide (see
+// useProduct.ts's comment / Task 14's report) — so `handle`/`title` have to
+// be requested explicitly here too, even though they're normally-default
+// fields, to keep working once `thumbnail` is added.
+const PRODUCTS_FIELDS = "handle,title,thumbnail";
+
 export function useProducts() {
   return useQuery({
     queryKey: ["products"],
     queryFn: async () => {
-      const { products } = await medusa.store.product.list();
+      const { products } = await medusa.store.product.list({ fields: PRODUCTS_FIELDS });
       return products;
     },
   });

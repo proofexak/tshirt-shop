@@ -6,7 +6,9 @@ import { useProduct } from "@/hooks/useProduct";
 import { cartQueryKey } from "@/hooks/useCart";
 import { addToCart } from "@/lib/cart-actions";
 import { useUiStore } from "@/store/ui-store";
-import { VariantPicker, type Variant } from "@/components/VariantPicker";
+import { VariantPicker, type ProductOption, type Variant } from "@/components/VariantPicker";
+import { ProductImage } from "@/components/ProductImage";
+import { pickProductImage } from "@/lib/product-image";
 
 type AddToCartErrorCode = "out_of_stock" | "invalid_quantity";
 
@@ -23,8 +25,11 @@ function ProductPageContent({ handle }: { handle: string }) {
   const queryClient = useQueryClient();
   const openCartDrawer = useUiStore((state) => state.openCartDrawer);
   // Held here (not inside VariantPicker) so the "Add to cart" button on
-  // this same page can read it and stay disabled until a size is picked.
+  // this same page can read it and stay disabled until every option is
+  // picked, and so the photo can react to a partial (e.g. colour-only)
+  // selection via onSelectionChange.
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Record<string, string>>({});
   const [isAddingToCart, setIsAddingToCart] = useState(false);
   const [addToCartError, setAddToCartError] = useState<string | null>(null);
 
@@ -44,13 +49,31 @@ function ProductPageContent({ handle }: { handle: string }) {
     );
   }
 
+  const options: ProductOption[] = (product.options ?? []).map((option) => ({
+    id: option.id,
+    title: option.title,
+    values: (option.values ?? []).map((value) => ({ value: value.value })),
+  }));
+
   const variants: Variant[] = (product.variants ?? []).map((variant) => ({
     id: variant.id,
     title: variant.title ?? "",
     inventory_quantity: variant.inventory_quantity,
+    options: (variant.options ?? []).map((o) => ({
+      option_id: o.option_id ?? "",
+      value: o.value,
+    })),
+    images: (variant.images ?? []).map((image) => ({ url: image.url })),
   }));
 
-  const price = product.variants?.[0]?.calculated_price;
+  // "Price unavailable" checks the selected variant once one is picked, and
+  // otherwise the first variant — this makes a product an admin forgot to
+  // price show up as broken rather than silently rendering no price at all
+  // (design doc's "Error Handling": a missed checklist item stays visible).
+  const priceCheckVariant =
+    (selectedVariantId && product.variants?.find((v) => v.id === selectedVariantId)) ||
+    product.variants?.[0];
+  const price = priceCheckVariant?.calculated_price;
   const formattedPrice =
     price?.calculated_amount != null && price.currency_code
       ? new Intl.NumberFormat("en", {
@@ -58,6 +81,16 @@ function ProductPageContent({ handle }: { handle: string }) {
           currency: price.currency_code,
         }).format(price.calculated_amount)
       : null;
+  const priceUnavailable = !formattedPrice;
+
+  // Reuses the already-normalized `variants` (title coerced to `string`,
+  // matching pickProductImage's Variant type) rather than passing the raw
+  // `product` through — the SDK's own StoreProduct type allows a null
+  // variant title, which pickProductImage's Variant doesn't.
+  const imageUrl = pickProductImage(
+    { thumbnail: product.thumbnail, images: product.images, variants },
+    selection
+  );
 
   const handleAddToCart = async () => {
     if (!selectedVariantId) {
@@ -95,12 +128,20 @@ function ProductPageContent({ handle }: { handle: string }) {
       // confirm a size was actually picked).
       data-selected-variant-id={selectedVariantId ?? undefined}
     >
+      <div className="mb-6 max-w-xs">
+        <ProductImage src={imageUrl} alt={product.title} />
+      </div>
       <h1 className="mb-2 text-2xl font-semibold">{product.title}</h1>
-      {formattedPrice && <p className="mb-6 text-lg">{formattedPrice}</p>}
-      <VariantPicker variants={variants} onSelect={setSelectedVariantId} />
+      <p className="mb-6 text-lg">{formattedPrice ?? "Price unavailable"}</p>
+      <VariantPicker
+        options={options}
+        variants={variants}
+        onSelect={setSelectedVariantId}
+        onSelectionChange={setSelection}
+      />
       <button
         type="button"
-        disabled={!selectedVariantId || isAddingToCart}
+        disabled={!selectedVariantId || isAddingToCart || priceUnavailable}
         onClick={handleAddToCart}
         className="mt-4 rounded bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
       >

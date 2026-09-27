@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useProducts } from "@/hooks/useProducts";
+import { ProductImage } from "@/components/ProductImage";
 
 export default function Home() {
   const { data: products, isLoading, isError } = useProducts();
@@ -28,6 +29,9 @@ export default function Home() {
       <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
         {products.map((product) => (
           <li key={product.id}>
+            <div className="mb-2">
+              <ProductImage src={product.thumbnail ?? null} alt={product.title} />
+            </div>
             <Link
               href={`/products/${product.handle}`}
               className="block rounded border border-gray-200 p-4 hover:border-gray-400"

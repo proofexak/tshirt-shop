@@ -47,7 +47,8 @@ function mockCartCookie(cartId: string) {
   cookieJar.set(CART_COOKIE_NAME, cartId);
 }
 
-async function getVariantId(handle: string, size: string): Promise<string> {
+async function getVariantId(handle: string, colour: string, size: string): Promise<string> {
+  const title = `${colour} / ${size}`;
   const { regions } = await medusa.store.region.list();
   const region = regions[0] as { id: string } | undefined;
   const { products } = await medusa.store.product.list({
@@ -55,10 +56,10 @@ async function getVariantId(handle: string, size: string): Promise<string> {
     region_id: region?.id,
     fields: "*variants",
   });
-  const variant = products[0]?.variants?.find((v) => v.title === size);
+  const variant = products[0]?.variants?.find((v) => v.title === title);
   if (!variant) {
     throw new Error(
-      `Fixture variant not found: ${handle} / ${size}. Is the dev DB seeded (pnpm --filter backend seed)?`
+      `Fixture variant not found: ${handle} / ${title}. Is the dev DB seeded (pnpm --filter backend seed:premade)?`
     );
   }
   return variant.id;
@@ -77,7 +78,7 @@ async function createAndCompleteTestCart(): Promise<{ id: string }> {
 
   const { cart: created } = await medusa.store.cart.create({ region_id: region.id });
 
-  const variantId = await getVariantId("classic-crew-tee", "L");
+  const variantId = await getVariantId("classic-crew-tee", "Black", "L");
   await medusa.store.cart.createLineItem(created.id, {
     variant_id: variantId,
     quantity: 1,
@@ -216,7 +217,7 @@ beforeEach(() => {
 
 describe("addLineItem", () => {
   test("rejects an out-of-stock variant", async () => {
-    const hoodieSizeSVariantId = await getVariantId("basic-hoodie", "S");
+    const hoodieSizeSVariantId = await getVariantId("basic-hoodie", "Black", "S");
     const cart = await getOrCreateCart();
 
     await expect(addLineItem(cart.id, hoodieSizeSVariantId, 1)).rejects.toThrow(
