@@ -12,7 +12,7 @@ implementation cycle.
 ## Goal
 
 A real, demoable, sellable storefront for **premade shirts only**: a
-shopper can create an account, browse a fixed catalog, add items to a
+shopper can create an account, browse a catalog, add items to a
 cart, and pay with a Stripe test card, ending in a real order recorded in
 Medusa. No custom-design canvas, no Printful integration, no deployment —
 those are separate sub-projects.
