@@ -1,5 +1,6 @@
 import { medusaIntegrationTestRunner } from "@medusajs/test-utils";
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils";
+import { linkSalesChannelsToStockLocationWorkflow } from "@medusajs/medusa/core-flows";
 import initialDataSeed from "../src/migration-scripts/initial-data-seed";
 import seedPremadeProducts from "../src/scripts/seed-premade-products";
 import {
@@ -157,6 +158,54 @@ medusaIntegrationTestRunner({
 
         const products = await listStoreProducts("id");
         expect(products).toHaveLength(3);
+      });
+    });
+
+    describe("seed-premade-products error paths", () => {
+      // Runs after the suite above, against the same already-seeded app/DB.
+      // seedPremadeProducts resolves the stock location's sales channel
+      // before it touches any product data (see its own comment on why a
+      // blind salesChannels[0] fallback is unsafe), so forcing that lookup
+      // to miss and asserting the throw doesn't disturb the previous
+      // tests' already-passed assertions — it never gets far enough to
+      // delete or recreate anything. The link is restored in `finally` so
+      // the DB is left the way the rest of the suite expects it.
+      test("throws instead of silently seeding into an unlinked sales channel", async () => {
+        const container = getContainer();
+        const query = container.resolve(ContainerRegistrationKeys.QUERY);
+
+        const { data: stockLocations } = await query.graph({
+          entity: "stock_location",
+          fields: ["id"],
+        });
+        const stockLocationId = stockLocations[0].id;
+        const { data: salesChannels } = await query.graph({
+          entity: "sales_channel",
+          fields: ["id", "stock_locations.id"],
+        });
+        const linkedChannelIds = salesChannels
+          .filter((sc: any) =>
+            (sc.stock_locations ?? []).some(
+              (loc: any) => loc.id === stockLocationId
+            )
+          )
+          .map((sc: any) => sc.id);
+
+        await linkSalesChannelsToStockLocationWorkflow(container).run({
+          input: { id: stockLocationId, remove: linkedChannelIds },
+        });
+
+        try {
+          await expect(
+            seedPremadeProducts({ container })
+          ).rejects.toThrow(
+            /No sales channel is linked to stock location/
+          );
+        } finally {
+          await linkSalesChannelsToStockLocationWorkflow(container).run({
+            input: { id: stockLocationId, add: linkedChannelIds },
+          });
+        }
       });
     });
   },

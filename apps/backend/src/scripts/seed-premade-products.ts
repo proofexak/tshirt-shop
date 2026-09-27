@@ -73,10 +73,19 @@ export default async function seedPremadeProducts({
     entity: "sales_channel",
     fields: ["id", "stock_locations.id"],
   });
-  const salesChannel =
-    salesChannels.find((sc) =>
-      (sc.stock_locations ?? []).some((loc) => loc?.id === stockLocation.id)
-    ) ?? salesChannels[0];
+  const salesChannel = salesChannels.find((sc) =>
+    (sc.stock_locations ?? []).some((loc) => loc?.id === stockLocation.id)
+  );
+  if (!salesChannel) {
+    throw new Error(
+      `No sales channel is linked to stock location ${stockLocation.id}. ` +
+        `Found ${salesChannels.length} sales channel(s): ${salesChannels
+          .map((sc) => sc.id)
+          .join(", ")}. Seeding into an unlinked channel would silently ` +
+        `report 0 stock via the store API regardless of real inventory — ` +
+        `link a sales channel to this stock location before re-running.`
+    );
+  }
 
   const { data: shippingProfiles } = await query.graph({
     entity: "shipping_profile",
@@ -243,21 +252,33 @@ export default async function seedPremadeProducts({
     const imageIdByUrl = new Map(
       (product.images ?? []).map((image) => [image.url, image.id])
     );
-    const imageIdByColour = new Map(
-      COLOURS.map((colour) => [
-        colour,
-        imageIdByUrl.get(colourUrls.get(colour)!),
-      ])
+    const imageIdByColour = new Map<string, string>(
+      COLOURS.map((colour) => {
+        const url = colourUrls.get(colour);
+        const imageId = url ? imageIdByUrl.get(url) : undefined;
+        if (!imageId) {
+          throw new Error(
+            `No uploaded image found for ${product.handle} / ${colour}. ` +
+              `Expected the product's images to include the URL uploaded ` +
+              `for this colour.`
+          );
+        }
+        return [colour, imageId];
+      })
     );
 
     for (const variant of product.variants ?? []) {
       const [colour] = variant.title.split(" / ");
-      const imageId = imageIdByColour.get(colour as (typeof COLOURS)[number]);
-      if (imageId) {
-        await batchVariantImagesWorkflow(container).run({
-          input: { variant_id: variant.id, add: [imageId] },
-        });
+      const imageId = imageIdByColour.get(colour);
+      if (!imageId) {
+        throw new Error(
+          `Variant "${variant.title}" on ${product.handle} has an ` +
+            `unrecognised colour "${colour}" — expected one of: ${COLOURS.join(", ")}.`
+        );
       }
+      await batchVariantImagesWorkflow(container).run({
+        input: { variant_id: variant.id, add: [imageId] },
+      });
 
       const inventoryItemId = variant.inventory_items?.[0]?.inventory_item_id;
       if (!inventoryItemId) {
