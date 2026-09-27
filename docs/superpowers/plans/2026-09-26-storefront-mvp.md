@@ -8,7 +8,7 @@
 
 **Tech Stack:** Next.js (App Router) + TypeScript, Tailwind, TanStack Query, Zustand, Medusa.js, Postgres, Stripe (test mode), Vitest, Playwright, pnpm workspaces.
 
-**Spec:** `docs/superpowers/specs/2026-09-26-storefront-mvp-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-26-storefront-mvp-design.md`, amended by `docs/superpowers/specs/2026-09-27-storefront-admin-catalog-design.md` (Tasks 13–15)
 
 ## Global Constraints
 
@@ -17,7 +17,7 @@
 - No Better Auth — Medusa's built-in customer auth (email/password, JWT) is the only auth system.
 - No transactional email — order confirmation is the on-screen page plus a server log line only.
 - Stripe test-mode keys only.
-- No admin UI — catalog is seeded via script, never edited through Medusa admin.
+- No *custom* admin UI — the catalog is managed via Medusa's built-in admin dashboard (`http://localhost:9000/app`, unmodified) and the seed script. (Amended 2026-09-27; was "No admin UI".)
 - No design customizer, no Printful integration — out of scope, separate sub-projects.
 
 ## Review Focus
@@ -27,6 +27,14 @@
 - Signup with an email that already has a Medusa customer record — must surface a clear inline error, not a generic 500. Tests owned by Task 4 (backend) and Task 8 (frontend).
 - Cart cookie present but pointing at a cart whose order already completed — must start a fresh cart, not error or risk double-charging. Test owned by Task 7.
 - Variant picker where a size/design combination has no matching variant — must be non-selectable and must not crash the product page. Test owned by Task 6.
+
+Added by the 2026-09-27 amendment (Tasks 13–15):
+
+- A product created in the admin with an option not named "Size"/"Colour" (e.g. "Color", or only Medusa's default option) — the picker must render it and let a valid variant be bought. Test owned by Task 15.
+- An admin-created product with no EUR price — must show "Price unavailable" with "Add to cart" disabled, not a crash or a €0 item. Test owned by Task 15.
+- An image URL that 404s (file deleted from `static/`) — must fall back to the placeholder box, not a broken image. Test owned by Task 15.
+- Re-running the seed against a DB that already has the premade products (and orders referencing them) — must end with exactly one product per handle. Test owned by Task 14.
+- A variant with no linked image while the product has a thumbnail — must show the thumbnail, not nothing. Test owned by Task 15.
 
 ---
 
@@ -70,6 +78,8 @@ git commit -m "Bootstrap monorepo and Medusa backend"
 ---
 
 ### Task 2: Seed Script for Premade Products
+
+> **Superseded in part by Task 14** (2026-09-27 amendment): the catalog gains Colour options and photos; the out-of-stock case becomes `basic-hoodie` **Black / S**.
 
 **Files:**
 - Create: `apps/backend/src/scripts/seed-premade-products.ts`
@@ -260,6 +270,8 @@ git commit -m "Scaffold Next.js storefront, Medusa client wrapper, and site head
 ---
 
 ### Task 6: Catalog & Product Detail Pages
+
+> **Superseded in part by Task 15** (2026-09-27 amendment): `VariantPicker` becomes option-driven; pages gain photos.
 
 **Files:**
 - Create: `apps/storefront/app/page.tsx` — catalog listing
@@ -604,6 +616,7 @@ git commit -m "Add order confirmation and account pages"
 test("browse, sign up, add to cart, checkout, see confirmation", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("link", { name: "Classic Crew Tee" }).click();
+  await page.getByRole("button", { name: "Black" }).click(); // amended 2026-09-27 (Task 14 colours)
   await page.getByRole("button", { name: "M" }).click();
   await page.getByRole("button", { name: "Add to cart" }).click();
   await page.getByRole("link", { name: "Sign up" }).click();
@@ -630,4 +643,223 @@ Expected: PASS (both `apps/backend` and `apps/storefront` running locally, seed 
 ```bash
 git add apps/storefront/e2e/golden-path.spec.ts
 git commit -m "Add golden-path e2e test"
+```
+
+---
+
+### Task 13: Admin Dashboard Access & File Storage
+
+**Files:**
+- Create: `apps/backend/src/scripts/create-admin.ts`
+- Modify: `apps/backend/package.json` — script `"admin:create": "medusa exec ./src/scripts/create-admin.ts"`
+- Modify: `apps/backend/medusa-config.ts` — register the File module with the local provider explicitly
+- Modify: `apps/backend/.env.example` — add `ADMIN_EMAIL=`, `ADMIN_PASSWORD=` (empty)
+- Modify: `apps/backend/.gitignore` — add `/static`
+- Modify: `apps/backend/README.md` — "Admin dashboard" section
+- Test: `apps/backend/integration-tests/admin-catalog.spec.ts`
+
+**Interfaces:**
+- Consumes: shared harness `integration-tests/test-runner-helpers.ts` and `initialDataSeed` (Task 2); region "Europe" / `eur`; Default Sales Channel.
+- Produces: `createAdminUser(container: MedusaContainer, input: { email: string; password: string }): Promise<{ userId: string; created: boolean }>` — idempotent (an existing user with that email returns `{ created: false }`, no error). Uploaded files served at `http://localhost:9000/static/<file>` — Task 15's `remotePatterns` depends on this URL shape.
+
+- [ ] **Step 1: Write the failing tests** (live `medusaIntegrationTestRunner`, unique `TEST_DB_NAME`)
+
+```typescript
+test("createAdminUser is idempotent", async () => {
+  const first = await createAdminUser(container, { email: "owner@example.com", password: "admin1234" });
+  const second = await createAdminUser(container, { email: "owner@example.com", password: "admin1234" });
+  expect(first.created).toBe(true);
+  expect(second).toEqual({ userId: first.userId, created: false });
+});
+
+test("an admin-created product with an image is visible in the store API", async () => {
+  // log in: POST /auth/user/emailpass → token; upload: POST /admin/uploads (multipart PNG) → files[0].url
+  // create: POST /admin/products { title: "Test Tee", handle: "test-tee", status: "published",
+  //   images: [{ url }], options: [{ title: "Size", values: ["M"] }],
+  //   variants: [{ title: "M", options: { Size: "M" }, prices: [{ currency_code: "eur", amount: 25 }] }],
+  //   sales_channels: [{ id: defaultSalesChannelId }] }
+  const { products } = await storeGet("/store/products?handle=test-tee&fields=*images");
+  expect(products).toHaveLength(1);
+  expect(products[0].images[0].url).toBe(uploadedUrl);
+  expect(uploadedUrl).toMatch(/^http:\/\/localhost:9000\/static\//);
+});
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `pnpm --filter backend test admin-catalog.spec.ts`
+Expected: FAIL — `createAdminUser` not found.
+
+- [ ] **Step 3: Implement `createAdminUser` + the default export, and configure file storage**
+
+`createAdminUser` does what `medusa user -e -p` does (auth identity via the `emailpass` provider + user, linked) — reuse Medusa's own workflow/CLI logic rather than hand-writing auth rows. The default export reads `ADMIN_EMAIL`/`ADMIN_PASSWORD` from env and exits non-zero with a message naming both variables if either is empty. In `medusa-config.ts`, register `@medusajs/medusa/file` with the `@medusajs/medusa/file-local` provider, options `upload_dir: "static"`, `backend_url: "http://localhost:9000/static"`. README section: how to run `admin:create`, the dashboard URL, and the new-product checklist from the spec (published, Default Sales Channel, EUR price).
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `pnpm --filter backend test` (whole backend suite — seed and auth specs must stay green)
+Expected: PASS
+
+- [ ] **Step 5: Create the dev admin and verify the dashboard login**
+
+The admin credentials are the user's to choose — never invent them. If `ADMIN_EMAIL`/`ADMIN_PASSWORD` are empty in `apps/backend/.env`, skip this step and say so in the report (verify only the empty-env error message). Otherwise run: `pnpm --filter backend admin:create` twice, then with `pnpm --filter backend dev` running: `curl -s -X POST localhost:9000/auth/user/emailpass -H 'content-type: application/json' -d '{"email":"…","password":"…"}'`
+Expected: first run creates, second reports it already exists; curl returns `{"token": …}`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add apps/backend/src/scripts/create-admin.ts apps/backend/package.json apps/backend/medusa-config.ts apps/backend/.env.example apps/backend/.gitignore apps/backend/README.md apps/backend/integration-tests/admin-catalog.spec.ts
+git commit -m "Enable Medusa admin dashboard: admin account script and local file storage"
+```
+
+---
+
+### Task 14: Re-seed Catalog with Colours & Photos
+
+**Files:**
+- Create: `apps/backend/seed-assets/generate-placeholders.mjs` (one-off generator, uses `sharp` as a backend devDependency)
+- Create: `apps/backend/seed-assets/{classic-crew-tee,v-neck-tee,basic-hoodie}-{black,white}.png` (6 files, committed output of the generator)
+- Modify: `apps/backend/src/scripts/seed-premade-products.ts`
+- Modify: `apps/backend/integration-tests/seed-products.spec.ts`
+
+**Interfaces:**
+- Consumes: file storage (Task 13); region/sales channel/stock location/shipping profile from `initialDataSeed`.
+- Produces (replaces Task 2's catalog shape; Tasks 7, 12, 15 depend on these exact values): handles `classic-crew-tee`, `v-neck-tee`, `basic-hoodie`; options **Size** (`S`,`M`,`L`,`XL`) and **Colour** (`Black`,`White`); variant titles `"<Colour> / <Size>"`; stock 10 each except `basic-hoodie` **Black / S** = `0`; `v-neck-tee` has **no** `White / XL` variant (7 variants; the others have 8); each variant linked to its colour's image; product thumbnail = the Black image. Default export signature unchanged: `seedPremadeProducts({ container })`.
+
+- [ ] **Step 1: Rewrite the seed test (failing)**
+
+```typescript
+test("seed creates colour × size variants with the deliberate edge cases", async () => {
+  const products = await listStoreProducts("*options.values,*variants.options,*variants.images,+variants.inventory_quantity,thumbnail,*images");
+  expect(products.map(p => p.handle).sort()).toEqual(["basic-hoodie", "classic-crew-tee", "v-neck-tee"]);
+  const byHandle = Object.fromEntries(products.map(p => [p.handle, p]));
+  expect(byHandle["classic-crew-tee"].variants).toHaveLength(8);
+  expect(byHandle["v-neck-tee"].variants.map(v => v.title)).not.toContain("White / XL");
+  expect(byHandle["v-neck-tee"].variants).toHaveLength(7);
+  expect(variant(byHandle["basic-hoodie"], "Black / S").inventory_quantity).toBe(0);
+  expect(variant(byHandle["basic-hoodie"], "White / S").inventory_quantity).toBe(10);
+  for (const p of products) {
+    expect(p.thumbnail).toMatch(/black/);
+    const colourOption = p.options.find(o => o.title === "Colour");
+    for (const v of p.variants) {
+      const colour = v.options.find(o => o.option_id === colourOption.id).value.toLowerCase();
+      expect(v.images.map(i => i.url).join()).toMatch(new RegExp(`${p.handle}-${colour}`));
+    }
+  }
+});
+
+test("re-running the seed leaves exactly one product per handle", async () => {
+  await seedPremadeProducts({ container: getContainer() });
+  const products = await listStoreProducts("id");
+  expect(products).toHaveLength(3);
+});
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `pnpm --filter backend test seed-products.spec.ts`
+Expected: FAIL — variants are size-only, no images.
+
+- [ ] **Step 3: Generate the 6 placeholder PNGs**
+
+Run: `node apps/backend/seed-assets/generate-placeholders.mjs` — 600×600 flat shirt silhouette in the colour (black `#1a1a1a`, white `#f5f5f5` on a light-grey background), product name as text. Commit the output; the seed never runs the generator.
+
+- [ ] **Step 4: Implement the seed changes**
+
+Before creating, delete any existing product with a premade handle via Medusa's delete workflow (re-runnable). Upload each PNG with core-flows' file-upload workflow (filenames keep the `<handle>-<colour>` stem so URLs are identifiable), create products with the options/variants above, then link each variant to its colour's image using Medusa 2.21.1's native variant-image support (`product_variant_product_image`; find the matching core-flows workflow). Inventory levels as in Interfaces.
+
+- [ ] **Step 5: Run to verify it passes**
+
+Run: `pnpm --filter backend test`
+Expected: PASS (seed, auth, admin specs)
+
+- [ ] **Step 6: Re-seed the local dev DB**
+
+Run: `pnpm --filter backend seed:premade`, then `curl` the store API for `basic-hoodie` with `fields=*variants,+variants.inventory_quantity`
+Expected: 8 variants titled `<Colour> / <Size>`, Black / S at 0; each image URL loads (`curl -sI` → 200).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/backend/seed-assets apps/backend/src/scripts/seed-premade-products.ts apps/backend/integration-tests/seed-products.spec.ts apps/backend/package.json pnpm-lock.yaml
+git commit -m "Re-seed premade catalog with colour variants and per-colour photos"
+```
+
+---
+
+### Task 15: Option-Driven Variant Picker, Product Photos & Thumbnails
+
+**Files:**
+- Modify: `apps/storefront/components/VariantPicker.tsx` (rewrite)
+- Create: `apps/storefront/lib/product-image.ts`
+- Create: `apps/storefront/components/ProductImage.tsx`
+- Modify: `apps/storefront/hooks/useProduct.ts`, `apps/storefront/hooks/useProducts.ts` (fields)
+- Modify: `apps/storefront/app/products/[handle]/page.tsx`, `apps/storefront/app/page.tsx`
+- Modify: `apps/storefront/components/CartDrawer.tsx` (show `variant_title`)
+- Modify: `apps/storefront/next.config.ts` (`images.remotePatterns`)
+- Test: `apps/storefront/components/VariantPicker.test.tsx` (rewrite), `apps/storefront/lib/product-image.test.ts`, `apps/storefront/components/ProductImage.test.tsx`
+- Modify tests: `apps/storefront/app/products/product-page-cart.test.tsx`, `apps/storefront/lib/cart.test.ts`
+
+**Interfaces:**
+- Consumes: Task 14's catalog shape; Task 13's image URL shape; Task 7's `addToCart(variantId, quantity)` (unchanged).
+- Produces:
+  - `VariantPicker({ options, variants, onSelect, onSelectionChange }: { options: ProductOption[]; variants: Variant[]; onSelect: (variantId: string | null) => void; onSelectionChange?: (selection: Record<string, string>) => void })` — `selection` maps option **id** → chosen value. `onSelectionChange` is an addition to the spec's props, needed so the page can swap the photo on a colour choice before a size is picked.
+  - `ProductOption = { id: string; title: string; values: { value: string }[] }`; `Variant = { id: string; title: string; inventory_quantity?: number | null; options?: { option_id: string; value: string }[] | null; images?: { url: string }[] | null }`
+  - `pickProductImage(product: { thumbnail?: string | null; images?: { url: string }[] | null; variants?: Variant[] | null }, selection: Record<string, string>): string | null`
+  - `ProductImage({ src, alt }: { src: string | null; alt: string })`
+
+- [ ] **Step 1: Write the failing tests**
+
+```typescript
+// VariantPicker.test.tsx — fixtures mirror Task 14 (v-neck: no White/XL; hoodie: Black/S qty 0)
+test("renders one labelled group per option", () => {
+  render(<VariantPicker options={vneckOptions} variants={vneckVariants} onSelect={vi.fn()} />);
+  expect(screen.getByRole("group", { name: "Size" })).toBeVisible();
+  expect(screen.getByRole("group", { name: "Colour" })).toBeVisible();
+});
+test("a combination with no matching variant is disabled", async () => { /* click White → XL disabled; M enabled */ });
+test("an out-of-stock combination is disabled", async () => { /* hoodie: click Black → S disabled */ });
+test("onSelect gets null until every option is chosen, then the variant id", async () => { /* Black → onSelect(null); M → onSelect(blackMId) */ });
+test("a choice made impossible by a new choice is cleared", async () => { /* v-neck: XL then White → XL cleared, onSelect(null) */ });
+test("a single-value option is preselected", () => { /* one option "Color" with value "Red" + one variant → onSelect(redId) on mount; also covers non-'Size'/'Colour' names */ });
+test("sizes are ordered S, M, L, XL regardless of API order", () => { /* values given as XL,S,L,M */ });
+test("a product with no in-stock variant renders every choice disabled", () => { /* all qty 0 → every button disabled, no crash */ });
+
+// product-image.test.ts
+test("uses the image of a variant matching the selection", () => { expect(pickProductImage(tee, { [colourId]: "White" })).toBe(whiteUrl); });
+test("falls back to thumbnail, then first image, then null", () => { /* variant without images → thumbnail; no thumbnail → images[0]; nothing → null */ });
+
+// ProductImage.test.tsx
+test("renders the placeholder when src is null or the image errors", () => { /* fireEvent.error(img) → placeholder box (data-testid="image-placeholder") */ });
+
+// product-page-cart.test.tsx additions
+test("choosing White swaps the product photo", async () => { /* img src contains white url after clicking White */ });
+test("a product with no EUR price shows 'Price unavailable' and cannot be added", async () => { /* Add to cart disabled even with a full selection */ });
+```
+
+Existing tests change: `product-page-cart.test.tsx` fixtures gain options and clicks become `Black` then `M` (assert `mockAddToCart` called with the Black / M id); `lib/cart.test.ts`'s `getVariantId(handle, size)` becomes `getVariantId(handle, colour, size)` matching variant title `"<Colour> / <Size>"` — completed-cart fixture uses `classic-crew-tee` Black / L, out-of-stock test uses `basic-hoodie` Black / S.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `pnpm --filter storefront test VariantPicker.test.tsx product-image.test.ts ProductImage.test.tsx product-page-cart.test.tsx`
+Expected: FAIL — new props/modules don't exist.
+
+- [ ] **Step 3: Implement**
+
+Picker: a value is enabled iff some variant with `inventory_quantity > 0` matches that value plus every *other* current selection. Hooks request `thumbnail,*images,*options.values,*variants.options,*variants.images` on top of the existing fields. `ProductImage` wraps `next/image` (fixed square, `onError` → placeholder). `remotePatterns` derives protocol/hostname/port from `NEXT_PUBLIC_MEDUSA_BACKEND_URL` with pathname `/static/**`. Catalog card: `ProductImage` of `thumbnail` above the existing title link (link's accessible name stays exactly the title). Product page: `ProductImage` of `pickProductImage(product, selection)`; "Price unavailable" and disabled Add to cart when the selected (or first) variant has no `calculated_price`. CartDrawer line: `{item.title} — {item.variant_title} × {item.quantity}`.
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `pnpm --filter storefront test` (backend up, Task 14 seed applied to the dev DB), then `pnpm --filter storefront exec next build`
+Expected: PASS; build succeeds.
+
+- [ ] **Step 5: Verify against the live admin path**
+
+With both servers up: in the dashboard (or admin API) create a product with options `Size`/`Color` (US spelling), one photo, EUR price, published → it appears in the catalog with its thumbnail and a valid variant can be added to the cart.
+Expected: as described; report what was done.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add apps/storefront/components apps/storefront/lib apps/storefront/hooks apps/storefront/app apps/storefront/next.config.ts
+git commit -m "Option-driven variant picker, per-colour product photos, catalog thumbnails"
 ```
